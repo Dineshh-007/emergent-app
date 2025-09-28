@@ -1,7 +1,9 @@
 {
-  "name": "frontend",
-  "version": "0.1.0",
+  "name": "image-distortion-corrector-frontend",
+  "version": "1.0.0",
+  "description": "Frontend for Image Distortion Corrector - A web application for correcting perspective distortion in images",
   "private": true,
+  "homepage": ".",
   "dependencies": {
     "@hookform/resolvers": "^5.0.1",
     "@radix-ui/react-accordion": "^1.2.8",
@@ -57,7 +59,13 @@
   "scripts": {
     "start": "craco start",
     "build": "craco build",
-    "test": "craco test"
+    "test": "craco test",
+    "eject": "react-scripts eject",
+    "lint": "eslint src --ext .js,.jsx,.ts,.tsx",
+    "lint:fix": "eslint src --ext .js,.jsx,.ts,.tsx --fix",
+    "format": "prettier --write src/**/*.{js,jsx,ts,tsx,json,css,md}",
+    "analyze": "yarn build && npx webpack-bundle-analyzer build/static/js/*.js",
+    "serve": "serve -s build -l 3000"
   },
   "browserslist": {
     "production": [
@@ -72,7 +80,6 @@
     ]
   },
   "devDependencies": {
-    "@babel/plugin-proposal-private-property-in-object": "^7.21.11",
     "@craco/craco": "^7.1.0",
     "@eslint/js": "9.23.0",
     "autoprefixer": "^10.4.20",
@@ -82,7 +89,27 @@
     "eslint-plugin-react": "7.37.4",
     "globals": "15.15.0",
     "postcss": "^8.4.49",
-    "tailwindcss": "^3.4.17"
+    "prettier": "^3.0.0",
+    "serve": "^14.0.0",
+    "tailwindcss": "^3.4.17",
+    "webpack-bundle-analyzer": "^4.0.0"
   },
-  "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
+  "keywords": [
+    "image-processing",
+    "opencv",
+    "perspective-correction",
+    "distortion-correction",
+    "react",
+    "computer-vision",
+    "image-enhancement"
+  ],
+  "author": "Dinesh, Iniyan, Sudharshan, Arjun, Boophesh",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/your-username/image-distortion-corrector.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-username/image-distortion-corrector/issues"
+  },
+  "license": "MIT"
 }
