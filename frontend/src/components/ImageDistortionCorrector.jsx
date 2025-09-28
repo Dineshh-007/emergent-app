@@ -1,52 +1,140 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
-import { Upload, Download, RotateCcw, Zap } from 'lucide-react';
+import { Upload, Download, RotateCcw, Zap, Info } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
-import { mockImageProcessing } from '../utils/mock';
+import { 
+  uploadImage, 
+  processImage, 
+  downloadImage, 
+  getImageUrl, 
+  validateImageFile 
+} from '../utils/api';
 
 const ImageDistortionCorrector = () => {
-  const [originalImage, setOriginalImage] = useState(null);
-  const [correctedImage, setCorrectedImage] = useState(null);
+  const [imageId, setImageId] = useState(null);
+  const [originalImageUrl, setOriginalImageUrl] = useState(null);
+  const [processedImageUrl, setProcessedImageUrl] = useState(null);
   const [cornerPoints, setCornerPoints] = useState([]);
+  const [isUploading, setIsUploading] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [draggedPoint, setDraggedPoint] = useState(null);
+  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
+  const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
   const canvasRef = useRef(null);
   const fileInputRef = useRef(null);
+  const imageRef = useRef(null);
   const { toast } = useToast();
 
-  const handleImageUpload = useCallback((event) => {
+  const handleImageUpload = useCallback(async (event) => {
     const file = event.target.files[0];
-    if (file && (file.type === 'image/jpeg' || file.type === 'image/png')) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        setOriginalImage(e.target.result);
-        setCornerPoints([]);
-        setCorrectedImage(null);
-        toast({
-          title: "Image uploaded successfully!",
-          description: "Click on four corners to define the distorted area"
-        });
-      };
-      reader.readAsDataURL(file);
-    } else {
+    if (!file) return;
+
+    try {
+      setIsUploading(true);
+      
+      // Validate file
+      validateImageFile(file);
+      
+      // Upload image
+      const result = await uploadImage(file);
+      
+      // Set image data
+      setImageId(result.image_id);
+      setOriginalImageUrl(getImageUrl(result.image_id, 'original'));
+      setCornerPoints([]);
+      setProcessedImageUrl(null);
+      
       toast({
-        title: "Invalid file type",
-        description: "Please upload a JPEG or PNG image",
+        title: "Image uploaded successfully!",
+        description: "Click on four corners to define the distorted area"
+      });
+      
+    } catch (error) {
+      toast({
+        title: "Upload failed",
+        description: error.message,
         variant: "destructive"
       });
+    } finally {
+      setIsUploading(false);
     }
   }, [toast]);
 
+  const updateCanvasSize = useCallback(() => {
+    if (canvasRef.current && imageRef.current) {
+      const canvas = canvasRef.current;
+      const img = imageRef.current;
+      
+      // Get the displayed size of the image
+      const rect = img.getBoundingClientRect();
+      canvas.width = rect.width;
+      canvas.height = rect.height;
+      canvas.style.width = `${rect.width}px`;
+      canvas.style.height = `${rect.height}px`;
+      
+      setCanvasSize({ width: rect.width, height: rect.height });
+    }
+  }, []);
+
+  const handleImageLoad = useCallback(() => {
+    if (imageRef.current) {
+      const img = imageRef.current;
+      setImageSize({ width: img.naturalWidth, height: img.naturalHeight });
+      updateCanvasSize();
+    }
+  }, [updateCanvasSize]);
+
+  useEffect(() => {
+    window.addEventListener('resize', updateCanvasSize);
+    return () => window.removeEventListener('resize', updateCanvasSize);
+  }, [updateCanvasSize]);
+
+  const convertToImageCoordinates = useCallback((canvasX, canvasY) => {
+    if (canvasSize.width === 0 || canvasSize.height === 0) return { x: canvasX, y: canvasY };
+    
+    // Convert canvas coordinates to actual image coordinates
+    const scaleX = imageSize.width / canvasSize.width;
+    const scaleY = imageSize.height / canvasSize.height;
+    
+    return {
+      x: canvasX * scaleX,
+      y: canvasY * scaleY
+    };
+  }, [canvasSize, imageSize]);
+
+  const convertToCanvasCoordinates = useCallback((imageX, imageY) => {
+    if (imageSize.width === 0 || imageSize.height === 0) return { x: imageX, y: imageY };
+    
+    // Convert image coordinates to canvas coordinates for display
+    const scaleX = canvasSize.width / imageSize.width;
+    const scaleY = canvasSize.height / imageSize.height;
+    
+    return {
+      x: imageX * scaleX,
+      y: imageY * scaleY
+    };
+  }, [canvasSize, imageSize]);
+
   const handleCanvasClick = useCallback((event) => {
-    if (!originalImage || cornerPoints.length >= 4) return;
+    if (!originalImageUrl || cornerPoints.length >= 4) return;
     
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
+    const canvasX = event.clientX - rect.left;
+    const canvasY = event.clientY - rect.top;
     
-    const newPoint = { x, y, id: cornerPoints.length };
+    // Convert to image coordinates
+    const imageCoords = convertToImageCoordinates(canvasX, canvasY);
+    
+    const newPoint = { 
+      x: imageCoords.x, 
+      y: imageCoords.y, 
+      id: cornerPoints.length,
+      displayX: canvasX,
+      displayY: canvasY
+    };
+    
     setCornerPoints(prev => [...prev, newPoint]);
     
     if (cornerPoints.length === 3) {
@@ -55,24 +143,35 @@ const ImageDistortionCorrector = () => {
         description: "Ready to process the image"
       });
     }
-  }, [originalImage, cornerPoints, toast]);
+  }, [originalImageUrl, cornerPoints, toast, convertToImageCoordinates]);
 
   const handlePointDrag = useCallback((event, pointId) => {
     if (draggedPoint !== pointId) return;
     
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
+    const canvasX = event.clientX - rect.left;
+    const canvasY = event.clientY - rect.top;
+    
+    // Convert to image coordinates
+    const imageCoords = convertToImageCoordinates(canvasX, canvasY);
     
     setCornerPoints(prev => 
       prev.map(point => 
-        point.id === pointId ? { ...point, x, y } : point
+        point.id === pointId 
+          ? { 
+              ...point, 
+              x: imageCoords.x, 
+              y: imageCoords.y,
+              displayX: canvasX,
+              displayY: canvasY
+            } 
+          : point
       )
     );
-  }, [draggedPoint]);
+  }, [draggedPoint, convertToImageCoordinates]);
 
-  const processImage = async () => {
+  const processImageDistortion = async () => {
     if (cornerPoints.length !== 4) {
       toast({
         title: "Incomplete selection",
@@ -84,17 +183,24 @@ const ImageDistortionCorrector = () => {
     
     setIsProcessing(true);
     try {
-      // Mock processing with delay
-      const result = await mockImageProcessing(originalImage, cornerPoints);
-      setCorrectedImage(result);
+      // Convert corner points to API format (image coordinates)
+      const apiCornerPoints = cornerPoints.map(point => ({
+        x: point.x,
+        y: point.y
+      }));
+      
+      const result = await processImage(imageId, apiCornerPoints);
+      
+      setProcessedImageUrl(result.processed_image_url);
+      
       toast({
         title: "Image processed successfully!",
-        description: "Your corrected image is ready for download"
+        description: `Processing completed in ${result.processing_time}`
       });
     } catch (error) {
       toast({
         title: "Processing failed",
-        description: "There was an error processing your image",
+        description: error.message,
         variant: "destructive"
       });
     } finally {
@@ -102,30 +208,48 @@ const ImageDistortionCorrector = () => {
     }
   };
 
-  const downloadImage = () => {
-    if (!correctedImage) return;
+  const handleDownload = () => {
+    if (!imageId) return;
     
-    const link = document.createElement('a');
-    link.href = correctedImage;
-    link.download = 'corrected-image.png';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    
-    toast({
-      title: "Download started!",
-      description: "Your corrected image is being downloaded"
-    });
+    try {
+      downloadImage(imageId);
+      toast({
+        title: "Download started!",
+        description: "Your corrected image is being downloaded"
+      });
+    } catch (error) {
+      toast({
+        title: "Download failed",
+        description: "There was an error downloading the image",
+        variant: "destructive"
+      });
+    }
   };
 
   const resetSelection = () => {
     setCornerPoints([]);
-    setCorrectedImage(null);
+    setProcessedImageUrl(null);
     toast({
       title: "Selection reset",
       description: "You can now select new corner points"
     });
   };
+
+  // Update display coordinates when canvas size changes
+  useEffect(() => {
+    if (cornerPoints.length > 0 && canvasSize.width > 0) {
+      setCornerPoints(prev => 
+        prev.map(point => {
+          const displayCoords = convertToCanvasCoordinates(point.x, point.y);
+          return {
+            ...point,
+            displayX: displayCoords.x,
+            displayY: displayCoords.y
+          };
+        })
+      );
+    }
+  }, [canvasSize, convertToCanvasCoordinates]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50 p-6">
@@ -146,18 +270,26 @@ const ImageDistortionCorrector = () => {
         </Card>
 
         {/* Upload Section */}
-        {!originalImage && (
+        {!originalImageUrl && (
           <Card className="backdrop-blur-lg bg-white/30 border-white/20 shadow-xl mb-8">
             <div className="p-8 text-center">
               <div className="border-2 border-dashed border-gray-300 rounded-lg p-12 transition-all duration-300 hover:border-blue-400 hover:bg-white/10">
                 <Upload className="w-16 h-16 text-gray-400 mx-auto mb-4" />
                 <h3 className="text-xl font-semibold text-gray-700 mb-2">Upload Your Image</h3>
-                <p className="text-gray-500 mb-4">Drag and drop or click to select JPEG/PNG files</p>
+                <p className="text-gray-500 mb-4">Drag and drop or click to select JPEG/PNG files (max 10MB)</p>
                 <Button 
                   onClick={() => fileInputRef.current?.click()}
+                  disabled={isUploading}
                   className="bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white"
                 >
-                  Choose File
+                  {isUploading ? (
+                    <>
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
+                      Uploading...
+                    </>
+                  ) : (
+                    'Choose File'
+                  )}
                 </Button>
                 <input
                   ref={fileInputRef}
@@ -171,7 +303,7 @@ const ImageDistortionCorrector = () => {
           </Card>
         )}
 
-        {originalImage && (
+        {originalImageUrl && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             {/* Original Image with Corner Selection */}
             <Card className="backdrop-blur-lg bg-white/30 border-white/20 shadow-xl">
@@ -181,28 +313,30 @@ const ImageDistortionCorrector = () => {
                   Original Image
                 </h3>
                 <div className="relative">
+                  <img
+                    ref={imageRef}
+                    src={originalImageUrl}
+                    alt="Original"
+                    onLoad={handleImageLoad}
+                    className="w-full h-auto border border-gray-200 rounded-lg"
+                    style={{ maxHeight: '400px', objectFit: 'contain' }}
+                  />
+                  
                   <canvas
                     ref={canvasRef}
                     onClick={handleCanvasClick}
                     onMouseMove={handlePointDrag}
                     onMouseUp={() => setDraggedPoint(null)}
-                    className="w-full h-auto border border-gray-200 rounded-lg cursor-crosshair"
-                    style={{ 
-                      backgroundImage: `url(${originalImage})`,
-                      backgroundSize: 'contain',
-                      backgroundRepeat: 'no-repeat',
-                      backgroundPosition: 'center',
-                      aspectRatio: '4/3',
-                      minHeight: '300px'
-                    }}
+                    className="absolute inset-0 cursor-crosshair"
+                    style={{ pointerEvents: cornerPoints.length >= 4 ? 'none' : 'auto' }}
                   />
                   
                   {/* Corner Points */}
                   {cornerPoints.map((point, index) => (
                     <div
                       key={point.id}
-                      className="absolute w-4 h-4 bg-red-500 border-2 border-white rounded-full cursor-move transform -translate-x-2 -translate-y-2 shadow-lg"
-                      style={{ left: point.x, top: point.y }}
+                      className="absolute w-4 h-4 bg-red-500 border-2 border-white rounded-full cursor-move transform -translate-x-2 -translate-y-2 shadow-lg z-10"
+                      style={{ left: point.displayX, top: point.displayY }}
                       onMouseDown={() => setDraggedPoint(point.id)}
                       title={`Corner ${index + 1}`}
                     />
@@ -211,7 +345,7 @@ const ImageDistortionCorrector = () => {
                   {/* Connecting Lines */}
                   {cornerPoints.length > 1 && (
                     <svg 
-                      className="absolute inset-0 pointer-events-none"
+                      className="absolute inset-0 pointer-events-none z-5"
                       style={{ width: '100%', height: '100%' }}
                     >
                       {cornerPoints.map((point, index) => {
@@ -220,10 +354,10 @@ const ImageDistortionCorrector = () => {
                         return (
                           <line
                             key={`line-${index}`}
-                            x1={point.x}
-                            y1={point.y}
-                            x2={nextPoint.x}
-                            y2={nextPoint.y}
+                            x1={point.displayX}
+                            y1={point.displayY}
+                            x2={nextPoint.displayX}
+                            y2={nextPoint.displayY}
                             stroke="red"
                             strokeWidth="2"
                             strokeDasharray="5,5"
@@ -236,7 +370,7 @@ const ImageDistortionCorrector = () => {
                 
                 <div className="mt-4 flex flex-wrap gap-2">
                   <Button
-                    onClick={processImage}
+                    onClick={processImageDistortion}
                     disabled={cornerPoints.length !== 4 || isProcessing}
                     className="bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600 text-white"
                   >
@@ -260,8 +394,16 @@ const ImageDistortionCorrector = () => {
                 </div>
                 
                 <div className="mt-4 text-sm text-gray-600">
-                  <p>Points selected: {cornerPoints.length}/4</p>
+                  <p className="flex items-center gap-2">
+                    <Info className="w-4 h-4" />
+                    Points selected: {cornerPoints.length}/4
+                  </p>
                   <p className="mt-1">Click on the four corners of the distorted area in order</p>
+                  {imageSize.width > 0 && (
+                    <p className="mt-1 text-xs text-gray-500">
+                      Image size: {imageSize.width} × {imageSize.height} pixels
+                    </p>
+                  )}
                 </div>
               </div>
             </Card>
@@ -274,18 +416,18 @@ const ImageDistortionCorrector = () => {
                   Corrected Image
                 </h3>
                 
-                {correctedImage ? (
+                {processedImageUrl ? (
                   <div className="space-y-4">
                     <div className="relative">
                       <img
-                        src={correctedImage}
+                        src={processedImageUrl}
                         alt="Corrected"
                         className="w-full h-auto border border-gray-200 rounded-lg shadow-md"
-                        style={{ aspectRatio: '4/3', objectFit: 'contain', minHeight: '300px' }}
+                        style={{ maxHeight: '400px', objectFit: 'contain' }}
                       />
                     </div>
                     <Button
-                      onClick={downloadImage}
+                      onClick={handleDownload}
                       className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white"
                     >
                       <Download className="w-4 h-4 mr-2" />
